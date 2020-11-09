@@ -1,0 +1,23 @@
+#!/bin/bash
+
+if [ "$#" -ne 2 ]; then
+    echo "Usage $0: port subdomain"
+    exit 1
+fi
+
+host="SSH_CONNECTION_STRING"
+local_port=$1
+subdomain=$2
+tunneler_port="0"
+for i in $(seq 3 $END); do 
+    tunneler_port=$(( $RANDOM % 65535 + 1023 ))
+
+    ssh $host "netstat -tulpen | grep $tunneler_port"
+
+    retVal=$?
+    if [ $retVal -eq 1 ]; then
+        break
+    fi
+done
+
+ssh -R $tunneler_port:localhost:$local_port -t $host "tunneler-server $tunneler_port $subdomain"

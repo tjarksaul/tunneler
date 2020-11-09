@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+import os
+import sys
+import re
+import time
+from psutil import process_iter
+
+host = 'domain.example.tld'
+template_path = '/etc/nginx/sites-available/000-tunnel-template'
+enabled_name = '/etc/nginx/sites-enabled/__tunnel_{subdomain}'
+
+subdomain = None
+port = None
+
+class InvalidPort(Exception): pass
+class InvalidSubdomain(Exception): pass
+
+def _check_port_valid(port: str) -> int:
+    try:
+        port = int(port)
+    except ValueError:
+        raise InvalidPort
+    
+    if port < 1024 or port > 65535:
+        raise InvalidPort
+
+    return port
+
+def _check_subdomain_valid(subdomain: str) -> str:
+    if not re.match(r"^[a-z_-]+$", subdomain):
+        raise InvalidSubdomain
+
+    return subdomain
+
+def _check_subdomain_available(subdomain: str) -> bool:
+    if not os.path.isfile(enabled_name.format(subdomain=subdomain)):
+        return True
+
+    regex = "proxy_pass http://localhost:([0-9]+)/;"
+
+    with open(enabled_name.format(subdomain=subdomain)) as f:
+        data = f.read()
+
+    matches = re.search(regex, data)
+    port = matches[1]
+
+    if not port:
+        return True
+
+    port = int(port)
+
+    return not _port_has_process(port)
+
+def _port_has_process(port: int) -> bool:
+    for proc in process_iter():
+        for conns in proc.connections(kind='inet'):
+            if conns.laddr.port == port:
+                return True
+
+    return False
+
+def _enable_tunnel(subdomain: str, port: int) -> None:
+    with open(template_path) as t:
+        template = t.read()
+    
+    config = template.format(subdomain=subdomain, port=port, host=host)
+
+    config_path = enabled_name.format(subdomain=subdomain)
+
+    with open(config_path, 'w') as c:
+        c.write(config)
+
+    os.system('systemctl reload nginx.service')
+
+def cleanup() -> None:
+    config_path = enabled_name.format(subdomain=subdomain)
+
+    if os.path.isfile(config_path):
+        os.remove(config_path)
+
+    os.system('systemctl reload nginx.service')
+
+def main() -> None:
+    global subdomain
+
+    if len(sys.argv) != 3:
+        print(f'Usage: {sys.argv[0]} port subdomain')
+        exit(1)
+
+    try:
+        port = _check_port_valid(sys.argv[1])
+    except InvalidPort:
+        print(f'{sys.argv[0]}: port must be a number 1024-65535')
+        exit(1)
+
+    try:
+        subdomain = _check_subdomain_valid(sys.argv[2])
+    except InvalidSubdomain:
+        print(f'{sys.argv[0]}: subdomain must be a string containing lower-case letters, dashes and underscores only')
+        exit(1)
+
+    if not _check_subdomain_available(subdomain):
+        print(f'{sys.argv[0]}: subdomain {subdomain} is already taken')
+        exit(1) 
+
+    _enable_tunnel(subdomain, port)
+
+    print(f'Tunnel from port to https://{subdomain}.{host} successfully established.')
+
+    while True:
+        time.sleep(0.1)
+
+if __name__ == '__main__':
+    try:
+        main()
+    except KeyboardInterrupt:
+        print('\nExiting by user request.', file=sys.stderr)
+        cleanup()
+        exit(0)
