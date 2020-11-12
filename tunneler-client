@@ -5,7 +5,7 @@ if [ "$#" -ne 2 ]; then
     exit 1
 fi
 
-host="SSH_CONNECTION_STRING"
+source $HOME/.config/tunneler.sh
 local_port=$1
 subdomain=$2
 tunneler_port="0"
